@@ -7,6 +7,9 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
+app.set('port', (process.env.PORT || 5000));
+
+
 // PostgreSQL connection (enable SSL if required)
 const pool = new Pool({
   user: "sanjeev.dasgupta",
@@ -124,8 +127,14 @@ app.get("/tiles/:z/:x/:y.pbf", async (req, res) => {
   }
 });
 
+app.get('/', (req, res) => {
+  res.send('Hello World!')
+});
 
-app.listen(3001, () => console.log("Backend running on http://localhost:3001"));
+
+app.listen(app.get('port'), function() {
+    console.log('App is running, server is listening on port ', app.get('port'));
+});
 
 
 
