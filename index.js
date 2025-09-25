@@ -7,7 +7,7 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-app.set('port', (process.env.PORT || 5000));
+app.set('port', (process.env.PORT || 3001));
 
 
 // PostgreSQL connection (enable SSL if required)
@@ -89,44 +89,182 @@ app.get("/api/features", async (req, res) => {
   }
 });
 
-
+/*
 app.get("/tiles/:z/:x/:y.pbf", async (req, res) => {
-  const z = Number(req.params.z);
-  const x = Number(req.params.x);
-  const y = Number(req.params.y);
-
-  const maxXY = 2 ** z - 1;
-
-  if (
-    isNaN(z) || isNaN(x) || isNaN(y) ||
-    x < 0 || x > maxXY || y < 0 || y > maxXY
-  ) {
-    return res.status(400).send("Invalid tile coordinates");
-  }
-
-  const sql = `
-    WITH mvtgeom AS (
-      SELECT ST_AsMVTGeom(
-        geom,
-        ST_TileEnvelope($1, $2, $3)
-      ) AS geom, geojson
-      FROM features
-      WHERE geom && ST_TileEnvelope($1, $2, $3)
-    )
-    SELECT ST_AsMVT(mvtgeom.*, 'features') AS tile
-    FROM mvtgeom;
-  `;
+  const { z, x, y } = req.params;
 
   try {
-    const result = await pool.query(sql, [z, x, y]);
-    res.setHeader("Content-Type", "application/x-protobuf");
-    res.send(result.rows[0].tile || Buffer.alloc(0));
+    const result = await pool.query(
+      `
+      WITH bounds AS (
+        SELECT ST_TileEnvelope($1, $2, $3) AS geom
+      )
+      SELECT ST_AsMVT(tile, 'mylayer', 4096, 'mvtgeom') AS mvt
+      FROM (
+        SELECT
+          id,
+          ST_AsMVTGeom(
+            ST_Transform(t.geom, 3857),
+            bounds.geom,
+            4096,
+            256,
+            true
+          ) AS mvtgeom
+        FROM features t
+        JOIN bounds
+          ON ST_Intersects(ST_Transform(t.geom, 3857), bounds.geom)
+      ) AS tile;
+      `,
+      [z, x, y]
+    );
+
+    if (!result.rows[0]?.mvt) {
+      res.status(204).send();
+    } else {
+      res.setHeader("Content-Type", "application/x-protobuf");
+      res.send(result.rows[0].mvt);
+    }
   } catch (err) {
     console.error(err);
     res.status(500).send("Tile generation error");
   }
 });
+*/
 
+
+/*
+ WITH bounds AS (
+  -- TileEnvelope always gives WebMercator (EPSG:3857)
+  SELECT ST_TileEnvelope($1, $2, $3) AS geom
+),
+mvtgeom AS (
+  SELECT id,
+         ST_AsMVTGeom(
+           ST_Transform(t.geom, 3857),  -- transform from EPSG:4326 to 3857
+           b.geom,
+           4096,
+           256,
+           true
+         ) AS geom
+  FROM features t, bounds b
+  WHERE ST_Intersects(ST_Transform(t.geom, 3857), b.geom)
+)
+SELECT ST_AsMVT(mvtgeom, 'features', 4096, 'geom') AS tile
+FROM mvtgeom;
+
+*/
+
+
+
+// Route: /tiles/:z/:x/:y.pbf
+app.get("/tiles/:z/:x/:y.pbf", async (req, res) => {
+  const { z, x, y } = req.params;
+
+  const sql = `
+   WITH bounds AS (
+  SELECT ST_TileEnvelope($1, $2, $3) AS geom
+),
+points AS (
+  SELECT id,
+         ST_AsMVTGeom(
+           ST_Transform(f.geom, 3857),
+           bounds.geom,
+           4096,
+           256,
+           true
+         ) AS geom
+  FROM features f, bounds
+  WHERE GeometryType(f.geom) IN ('POINT','MULTIPOINT')
+    AND ST_Intersects(ST_Transform(f.geom, 3857), bounds.geom)
+),
+lines AS (
+  SELECT id,
+         ST_AsMVTGeom(
+           ST_Transform(f.geom, 3857),
+           bounds.geom,
+           4096,
+           256,
+           true
+         ) AS geom
+  FROM features f, bounds
+  WHERE GeometryType(f.geom) IN ('LINESTRING','MULTILINESTRING')
+    AND ST_Intersects(ST_Transform(f.geom, 3857), bounds.geom)
+),
+polygons AS (
+  SELECT id,
+         ST_AsMVTGeom(
+           ST_Transform(f.geom, 3857),
+           bounds.geom,
+           4096,
+           256,
+           true
+         ) AS geom
+  FROM features f, bounds
+  WHERE GeometryType(f.geom) IN ('POLYGON','MULTIPOLYGON')
+    AND ST_Intersects(ST_Transform(f.geom, 3857), bounds.geom)
+),
+mvt AS (
+  SELECT ST_AsMVT(points, 'my_points', 4096, 'geom') AS tile FROM points
+  UNION ALL
+  SELECT ST_AsMVT(lines, 'my_lines', 4096, 'geom') FROM lines
+  UNION ALL
+  SELECT ST_AsMVT(polygons, 'my_polygons', 4096, 'geom') FROM polygons
+)
+SELECT string_agg(tile, '' ORDER BY tile) AS tile
+FROM mvt;
+  `;
+
+  try {
+    const result = await pool.query(sql, [z, x, y]);
+    const tile = result.rows[0].tile;
+
+    if (tile) {
+      res.setHeader("Content-Type", "application/vnd.mapbox-vector-tile");
+      res.send(tile);
+    } else {
+      res.status(204).send(); // No content for empty tile
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error generating vector tile");
+  }
+});
+/*
+app.get('/tiles/:z/:x/:y.pbf', async (req, res) => {
+   const { z, x, y } = req.params;
+
+  try {
+    const result = await pool.query(
+      `WITH bounds AS (
+  SELECT ST_TileEnvelope($1, $2, $3) AS geom
+),
+mvtgeom AS (
+  SELECT 
+    ST_AsMVTGeom(t.geom, bounds.geom) AS geom,
+    t.id
+  FROM features t, bounds
+  WHERE t.geom && bounds.geom
+)
+SELECT ST_AsMVT(mvtgeom, 'features', 4096, 'geom') AS mvt
+FROM mvtgeom;
+      `,
+      [z, x, y]
+    );
+
+    const tile = result.rows[0].mvt;
+    if (!tile) {
+      res.status(204).send(); // empty tile
+      return;
+    }
+
+    res.setHeader('Content-Type', 'application/x-protobuf');
+    res.send(tile);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(err.message);
+  }
+});
+*/
 app.get('/', (req, res) => {
   res.send('Hello World!')
 });
