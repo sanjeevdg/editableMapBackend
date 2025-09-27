@@ -2,6 +2,8 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const { Pool } = require("pg");
+const zlib = require('zlib');
+//import zlib from "zlib";
 
 const app = express();
 app.use(cors());
@@ -35,7 +37,7 @@ pool.query(`
 // Save features (replace existing)
 app.post("/api/features", async (req, res) => {
   const features = req.body.features;
-console.log('featuresposting',features);
+//console.log('featuresposting',features);
   try {
     await pool.query("TRUNCATE features");
     for (const f of features) {
@@ -64,6 +66,172 @@ console.log('featuresgetting',result.rows);
   }
 });
 */
+
+app.delete("/features/:id", async (req, res) => {
+  const id = req.params.id;
+
+console.log('IDRETURNED=='+id);
+
+  if (!id) return res.status(400).json({ error: "Missing id" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const q = `DELETE FROM features WHERE id = $1 RETURNING id`;
+    const result = await client.query(q, [id]);
+
+    if (result.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, message: "Feature not found" });
+    }
+
+    await client.query("COMMIT");
+    return res.json({ success: true, deletedId: result.rows[0].id });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Delete feature error:", err);
+    return res.status(500).json({ success: false, error: "DB error" });
+  } finally {
+    client.release();
+  }
+});
+
+
+app.post("/save-geojson", express.json(), async (req, res) => {
+  const geojson = req.body;
+
+  try {
+    for (const feature of geojson.features) {
+      const geom = JSON.stringify(feature.geometry);
+
+
+/*
+        `INSERT INTO features (geom, geojson) 
+         VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2::jsonb)`
+,        [geom, feature.properties || {}]
+
+*/
+      await pool.query(
+"INSERT INTO features (geom, geojson) VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2)",
+        [JSON.stringify(f.geometry), f]
+
+      );
+    }
+    res.send({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error saving GeoJSON");
+  }
+});
+
+
+app.get("/xtiles/:z/:x/:y.pbf", async (req, res) => {
+  const { z, x, y } = req.params;
+  console.log("Tile request →", z, x, y); // should log integers
+
+  try {
+    const sql = `
+      WITH bounds AS (
+        SELECT ST_TileEnvelope($1, $2, $3) AS tile_geom
+      ),
+      mvtgeom AS (
+        SELECT
+          id,
+          ST_AsMVTGeom(ST_Transform(geom, 3857), tile_geom, 4096, 256, true) AS mvt_geom,
+          *
+        FROM features, bounds
+        WHERE ST_Intersects(ST_Transform(geom, 3857), tile_geom)
+      )
+      SELECT ST_AsMVT(mvtgeom, 'default', 4096, 'mvt_geom') AS mvt
+      FROM mvtgeom;
+    `;
+
+    const { rows } = await pool.query(sql, [z, x, y]);
+
+    if (!rows[0] || !rows[0].mvt) {
+      res.status(204).send();
+      return;
+    }
+
+    const compressed = zlib.gzipSync(rows[0].mvt);
+
+    res.setHeader("Content-Type", "application/x-protobuf");
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.send(compressed);
+
+  } catch (err) {
+    console.error("Tile error:", err);
+    res.status(500).send("Tile generation error");
+  }
+});
+
+app.get("/mtiles/:z/:x/:y.pbf", async (req, res) => {
+  try {
+    const { z, x, y } = req.params;
+
+console.log('z='+ z + 'x=' + x + 'y=' + y);
+
+    const sql = `
+      WITH bounds AS (
+  SELECT ST_TileEnvelope($1, $2, $3) AS tile_geom
+),
+mvtgeom AS (
+  SELECT
+    g.id,
+    ST_AsMVTGeom(
+      ST_Transform(g.geom, 3857),
+      b.tile_geom,
+      4096,
+      256,
+      true
+    ) AS mvt_geom,
+    g.*
+  FROM features g
+  JOIN bounds b
+    ON ST_Intersects(ST_Transform(g.geom, 3857), b.tile_geom)
+),
+points AS (
+  SELECT ST_AsMVT(mvtgeom, 'points', 4096, 'mvt_geom')
+  FROM mvtgeom WHERE GeometryType(mvt_geom) = 'POINT'
+),
+lines AS (
+  SELECT ST_AsMVT(mvtgeom, 'lines', 4096, 'mvt_geom')
+  FROM mvtgeom WHERE GeometryType(mvt_geom) LIKE 'LINESTRING%'
+),
+polygons AS (
+  SELECT ST_AsMVT(mvtgeom, 'polygons', 4096, 'mvt_geom')
+  FROM mvtgeom WHERE GeometryType(mvt_geom) LIKE 'POLYGON%'
+)
+SELECT
+  (SELECT * FROM points) ||
+  (SELECT * FROM lines) ||
+  (SELECT * FROM polygons) AS mvt;
+
+    `;
+
+    const { rows } = await pool.query(sql, [z, x, y]);
+
+    if (!rows[0].mvt) {
+      res.status(204).send(); // no content
+      return;
+    }
+
+    const compressed = zlib.gzipSync(rows[0].mvt);
+
+    res.setHeader("Content-Type", "application/x-protobuf");
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.send(compressed);
+
+  } catch (err) {
+    console.error("Tile error:", err);
+    res.status(500).send("Tile generation error");
+  }
+});
+
+
 app.get("/api/features", async (req, res) => {
   try {
     const result = await pool.query(
@@ -214,12 +382,18 @@ SELECT string_agg(tile, '' ORDER BY tile) AS tile
 FROM mvt;
   `;
 
+
+
   try {
     const result = await pool.query(sql, [z, x, y]);
     const tile = result.rows[0].tile;
 
     if (tile) {
       res.setHeader("Content-Type", "application/vnd.mapbox-vector-tile");
+//res.setHeader("Content-Type", "application/x-protobuf");
+//res.setHeader("Content-Encoding", "gzip"); // if gzipped
+//res.setHeader("Access-Control-Allow-Origin", "*");
+
       res.send(tile);
     } else {
       res.status(204).send(); // No content for empty tile
