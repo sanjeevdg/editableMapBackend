@@ -33,16 +33,140 @@ pool.query(`
   )
 `);
 
+app.put("/api/features/:id", async (req, res) => {
+  const { id } = req.params;
+  const { properties } = req.body; // new properties object (key/value pairs)
 
-// Save features (replace existing)
+console.log('req.params',req.params);
+console.log('req.body',req.body);
+
+
+  try {
+    await pool.query(
+      `
+      UPDATE features
+      SET geojson = jsonb_set(
+        geojson,
+        '{properties}',   -- target JSON path inside geojson
+        $1::jsonb,        -- replace with new properties object
+        true              -- create if not exists
+      )
+      WHERE id = $2
+      `,
+      [JSON.stringify(properties), id]
+    );
+console.log('put success!');
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error updating properties:", err);
+    res.status(500).json({ error: "DB update failed" });
+  }
+});
+
+
+/*
 app.post("/api/features", async (req, res) => {
+  const features = req.body.features; // array of features from frontend
+
+console.log('feaurgthes-len',features.length);
+
+  try {
+    for (const f of features) {
+      // Build a clean GeoJSON feature
+      const cleanFeature = {
+        type: "Feature",
+        geometry: f.geometry,
+        properties: f.properties || {},
+      };
+    if (f.id) {
+        // Existing feature → update
+        await pool.query(
+          "UPDATE features SET geom = ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), geojson = $2 WHERE id = $3",
+          [JSON.stringify(f.geometry), cleanFeature, f.id]
+        ); console.log('updated');
+      } else {
+        // New feature → insert
+        const result = await pool.query(
+          "INSERT INTO features (geom, geojson) VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2) RETURNING id",
+          [JSON.stringify(f.geometry), cleanFeature]
+        );console.log('inserted');
+        f.id = result.rows[0].id; // Assign ID back to frontend if needed
+      }
+
+    }
+
+    res.send({ status: "ok" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "DB error" });
+  }
+});
+*/
+
+app.post("/api/features", async (req, res) => {
+  const features = req.body.features;
+console.log('featuresfrom request',features);
+
+ // expect Feature[]
+  try {
+    await pool.query("TRUNCATE features");
+    for (const f of features) {
+
+console.log('iterating-features',f);
+
+      await pool.query(
+        "INSERT INTO features (geom, geojson) VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2)",
+  [JSON.stringify(f.geometry), {
+  type: "Feature",
+  geometry: f.geometry,
+  properties: f.properties || {},
+}]
+      );
+    }
+    res.send({ status: "ok" });
+  } catch (err) {
+    console.error("Error saving features:", err);
+    res.status(500).send({ error: "DB error" });
+  }
+});
+
+app.post("/react/api/features/", async (req, res) => {
+  const features = req.body.features;
+console.log('featuresfrom request',features);
+
+ // expect Feature[]
+  try {
+//    await pool.query("TRUNCATE features");
+    for (const f of features) {
+
+console.log('iterating-features',f);
+
+      await pool.query(
+        "INSERT INTO features (geom, geojson) VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2)",
+  [JSON.stringify(f.geometry), {
+  type: "Feature",
+  geometry: f.geometry,
+  properties: f.properties || {},
+}]
+      );
+    }
+    res.send({ status: "ok" });
+  } catch (err) {
+    console.error("Error saving features:", err);
+    res.status(500).send({ error: "DB error" });
+  }
+});
+
+
+/*s
+app.post("/api/ffeatures", async (req, res) => {
   const features = req.body.features;
 //console.log('featuresposting',features);
   try {
     await pool.query("TRUNCATE features");
     for (const f of features) {
       await pool.query(
-        "INSERT INTO features (geom, geojson) VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2)",
+        "update features set geom=ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), geojson=$2 where features.geojson.id=",
         [JSON.stringify(f.geometry), f]
       );
     }
@@ -52,6 +176,9 @@ app.post("/api/features", async (req, res) => {
     res.status(500).send({ error: "DB error" });
   }
 });
+*/
+
+
 
 /*
 // Get features
@@ -65,7 +192,7 @@ console.log('featuresgetting',result.rows);
     res.status(500).send({ error: "DB error" });
   }
 });
-*/
+
 
 app.delete("/features/:id", async (req, res) => {
   const id = req.params.id;
@@ -96,32 +223,19 @@ console.log('IDRETURNED=='+id);
     client.release();
   }
 });
+*/
 
+app.delete("/api/features/:id", async (req, res) => {
+  const { id } = req.params;
 
-app.post("/save-geojson", express.json(), async (req, res) => {
-  const geojson = req.body;
+console.log('deleterequestparam==',req.params);
 
   try {
-    for (const feature of geojson.features) {
-      const geom = JSON.stringify(feature.geometry);
-
-
-/*
-        `INSERT INTO features (geom, geojson) 
-         VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2::jsonb)`
-,        [geom, feature.properties || {}]
-
-*/
-      await pool.query(
-"INSERT INTO features (geom, geojson) VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2)",
-        [JSON.stringify(f.geometry), f]
-
-      );
-    }
-    res.send({ success: true });
+    await pool.query("DELETE FROM features WHERE id = $1", [id]);
+    res.send({ status: "ok" });
   } catch (err) {
     console.error(err);
-    res.status(500).send("Error saving GeoJSON");
+    res.status(500).send({ error: "DB delete error" });
   }
 });
 
@@ -231,8 +345,66 @@ SELECT
   }
 });
 
+app.get("/api/features", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, geom, geojson FROM features");
+
+    // Normalize each row into a standard GeoJSON Feature
+    const features = result.rows.map((row) => {
+      const geojson = row.geojson || {};
+
+      return {
+        type: "Feature",
+        id: row.id,
+        geometry: geojson.geometry || null,
+        properties: geojson.properties || {}, // ✅ normalize here
+      };
+    });
+
+//console.log('returning features via get request==',features);
+    res.json({
+      type: "FeatureCollection",
+      features,
+    });
+  } catch (err) {
+    console.error("Error fetching features:", err);
+    res.status(500).json({ error: "DB fetch failed" });
+  }
+});
+
+
+/*
+app.get("/api/features", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, ST_AsGeoJSON(geom) AS geometry, geojson
+       FROM features`
+    );
+
+    const features = rows.map((row) => ({
+      type: "Feature",
+      id: row.id,
+      geometry: JSON.parse(row.geometry),
+      properties: row.geojson || {},
+    }));
+
+    res.json({
+      type: "FeatureCollection",
+      features,
+    });
+  } catch (err) {
+    console.error("Error fetching features:", err);
+    res.status(500).send({ error: "DB error" });
+  }
+});
+
+
+
 
 app.get("/api/features", async (req, res) => {
+
+console.log('entering get method...');
+
   try {
     const result = await pool.query(
       `SELECT jsonb_build_object(
@@ -250,13 +422,13 @@ app.get("/api/features", async (req, res) => {
       type: "FeatureCollection",
       features
     });
-
+console.log('exiting get method...');
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Database error" });
   }
 });
-
+*/
 /*
 app.get("/tiles/:z/:x/:y.pbf", async (req, res) => {
   const { z, x, y } = req.params;
