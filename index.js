@@ -131,25 +131,25 @@ console.log('iterating-features',f);
 });
 
 app.post("/react/api/features/", async (req, res) => {
-  const features = req.body.features;
-console.log('featuresfrom request',features);
+  const features = req.body;
+console.log('featuresfrom request',req.body);
 
  // expect Feature[]
   try {
 //    await pool.query("TRUNCATE features");
-    for (const f of features) {
+  //  for (const f of features) {
 
-console.log('iterating-features',f);
+console.log('iterating-features',req.body);
 
       await pool.query(
         "INSERT INTO features (geom, geojson) VALUES (ST_SetSRID(ST_GeomFromGeoJSON($1), 4326), $2)",
-  [JSON.stringify(f.geometry), {
+  [JSON.stringify(features.geometry), {
   type: "Feature",
-  geometry: f.geometry,
-  properties: f.properties || {},
+  geometry: features.geometry,
+  properties: features.properties || {},
 }]
       );
-    }
+  //  }
     res.send({ status: "ok" });
   } catch (err) {
     console.error("Error saving features:", err);
@@ -326,6 +326,8 @@ SELECT
     `;
 
     const { rows } = await pool.query(sql, [z, x, y]);
+
+console.log('myrows============',rows);
 
     if (!rows[0].mvt) {
       res.status(204).send(); // no content
