@@ -294,6 +294,7 @@ console.log('z='+ z + 'x=' + x + 'y=' + y);
 mvtgeom AS (
   SELECT
     g.id,
+    (g.geojson->'properties') AS properties,
     ST_AsMVTGeom(
       ST_Transform(g.geom, 3857),
       b.tile_geom,
@@ -327,7 +328,7 @@ SELECT
 
     const { rows } = await pool.query(sql, [z, x, y]);
 
-console.log('myrows============',rows);
+//console.log('myrows============',rows);
 
     if (!rows[0].mvt) {
       res.status(204).send(); // no content
