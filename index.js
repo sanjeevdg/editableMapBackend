@@ -507,7 +507,7 @@ app.get("/tiles/:z/:x/:y.pbf", async (req, res) => {
   SELECT ST_TileEnvelope($1, $2, $3) AS geom
 ),
 points AS (
-  SELECT id,
+  SELECT f.id,
          ST_AsMVTGeom(
            ST_Transform(f.geom, 3857),
            bounds.geom,
