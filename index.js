@@ -17,7 +17,7 @@ const pool = new Pool({
   user: "sanjeev.dasgupta",
   host: "ep-solitary-meadow-593229-pooler.ap-southeast-1.aws.neon.tech",
   database: "postgisdb",
-  password: "O2iAgXxL6dcu",
+  password: "npg_5RTk2dfqFIla",
   port: 5432,
 ssl: {
     rejectUnauthorized: false, // allow self-signed certificates
